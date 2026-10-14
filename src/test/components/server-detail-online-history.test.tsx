@@ -1,6 +1,7 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import dayjs from "dayjs";
 import type { ReactElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import ServerDetailOnlineHistory from "@/components/ServerDetailOnlineHistory";
@@ -94,6 +95,42 @@ describe("ServerDetailOnlineHistory", () => {
 		// 进行中 Badge 精确匹配；时间段行的箭头表明进行中会话已渲染
 		expect(screen.getByText("serverOnlineHistory.ongoing")).toBeInTheDocument();
 		expect(screen.getAllByText(/→/).length).toBe(2);
+	});
+
+	it("maps each day's periods onto the shared 0:00-24:00 timeline", async () => {
+		apiMocks.fetchServerOnlineHistory.mockResolvedValue(
+			onlineHistoryResponse(),
+		);
+
+		renderWithQuery(<ServerDetailOnlineHistory server_id="7" />);
+
+		expect(await screen.findByText("0:00")).toBeInTheDocument();
+		expect(screen.getByText("12:00")).toBeInTheDocument();
+		expect(screen.getByText("24:00")).toBeInTheDocument();
+
+		// 每个时间段按当日起点换算为百分比坐标（与时区无关）
+		const segments = await screen.findAllByTestId("online-segment");
+		expect(segments).toHaveLength(2);
+		const dayStart = dayjs("2026-10-13").startOf("day");
+		const startPct =
+			(dayjs("2026-10-13T08:00:00.000Z").diff(dayStart, "second") / 86400) *
+			100;
+		const widthPct =
+			(dayjs("2026-10-13T09:30:00.000Z").diff(
+				"2026-10-13T08:00:00.000Z",
+				"second",
+			) /
+				86400) *
+			100;
+		expect(Number.parseFloat(segments[0].style.left)).toBeCloseTo(
+			Math.max(0, startPct),
+			2,
+		);
+		expect(Number.parseFloat(segments[0].style.width)).toBeCloseTo(
+			Math.min(100, widthPct),
+			2,
+		);
+		expect(segments[0].style.minWidth).toBe("2px");
 	});
 
 	it("switches the query window via the day selector", async () => {

@@ -6,9 +6,16 @@ import NetworkChartLoading from "@/components/NetworkChartLoading";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
+import {
+	Tooltip,
+	TooltipContent,
+	TooltipProvider,
+	TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { useActiveIndicator } from "@/hooks/use-active-indicator";
 import { fetchServerOnlineHistory } from "@/lib/nezha-api";
 import { cn } from "@/lib/utils";
+import type { OnlinePeriod } from "@/types/nezha-api";
 
 const DAY_OPTIONS = [1, 7, 30];
 
@@ -23,6 +30,30 @@ function formatDuration(seconds: number): string {
 		return `${h}h ${m}m`;
 	}
 	return `${m}m`;
+}
+
+// 把一天映射到 0:00–24:00 整轴：裁剪出该日与每个时间段的交集，
+// 换算成轨道内的百分比坐标。
+function buildDaySegments(periods: OnlinePeriod[], date: string) {
+	const dayStart = dayjs(date).startOf("day");
+	const dayEnd = dayStart.add(1, "day");
+	return periods
+		.map((period) => {
+			const start = dayjs(period.start);
+			const end = dayjs(period.end);
+			const segStart = start.isAfter(dayStart) ? start : dayStart;
+			const segEnd = end.isBefore(dayEnd) ? end : dayEnd;
+			const leftPct = Math.max(
+				0,
+				(segStart.diff(dayStart, "second") / 86400) * 100,
+			);
+			const widthPct = Math.min(
+				Math.max(0, (segEnd.diff(segStart, "second") / 86400) * 100),
+				100 - leftPct,
+			);
+			return { period, segStart, segEnd, leftPct, widthPct };
+		})
+		.filter((segment) => segment.widthPct > 0);
 }
 
 function DaysSelector({
@@ -190,23 +221,83 @@ export default function ServerDetailOnlineHistory({
 					<p className="text-xs font-medium text-muted-foreground">
 						{t("serverOnlineHistory.dailyOnline")}
 					</p>
-					<div className="flex flex-col gap-1.5 mt-2.5">
-						{online?.daily.map((day) => (
-							<div key={day.date} className="flex items-center gap-3">
-								<span className="w-24 shrink-0 text-xs text-muted-foreground">
-									{day.date}
-								</span>
-								<Progress
-									value={(day.online_seconds / 86400) * 100}
-									indicatorClassName="bg-green-500"
-									className="h-2 flex-1 rounded-sm"
-								/>
-								<span className="w-20 shrink-0 text-right text-xs">
-									{formatDuration(day.online_seconds)}
-								</span>
-							</div>
-						))}
+					{/* 0:00–24:00 共享时间轴刻度 */}
+					<div className="flex items-center gap-3 mt-2 text-[10px] text-muted-foreground/70">
+						<span className="w-24 shrink-0" aria-hidden />
+						<div className="relative h-3 flex-1">
+							<span className="absolute left-0 top-0">0:00</span>
+							<span className="absolute left-1/2 -translate-x-1/2 top-0">
+								12:00
+							</span>
+							<span className="absolute right-0 top-0">24:00</span>
+						</div>
+						<span className="w-20 shrink-0" aria-hidden />
 					</div>
+					<TooltipProvider delayDuration={100}>
+						<div className="flex flex-col gap-1.5 mt-1">
+							{online?.daily.map((day) => {
+								const segments = buildDaySegments(
+									online?.periods ?? [],
+									day.date,
+								);
+								return (
+									<div key={day.date} className="flex items-center gap-3">
+										<span className="w-24 shrink-0 text-xs text-muted-foreground">
+											{day.date}
+										</span>
+										<div className="relative h-2 flex-1 rounded-sm bg-muted dark:bg-muted/40 overflow-hidden">
+											{segments.map((segment) => (
+												<Tooltip
+													key={`${segment.leftPct}-${segment.period.start}`}
+												>
+													<TooltipTrigger asChild>
+														<div
+															data-testid="online-segment"
+															className={cn(
+																"absolute inset-y-0 cursor-pointer rounded-sm bg-green-500 transition-colors hover:bg-green-400",
+																segment.period.ongoing &&
+																	segment.segEnd.isSame(
+																		dayjs(segment.period.end),
+																	) &&
+																	"bg-green-400 dark:bg-green-500",
+															)}
+															style={{
+																left: `${segment.leftPct}%`,
+																width: `${segment.widthPct}%`,
+																minWidth: 2,
+															}}
+														/>
+													</TooltipTrigger>
+													<TooltipContent className="px-2 py-1">
+														<div className="flex flex-col gap-0.5">
+															<span>
+																{segment.segStart.format("HH:mm:ss")}
+																{" → "}
+																{segment.period.ongoing
+																	? t("serverOnlineHistory.ongoing")
+																	: segment.segEnd.format("HH:mm:ss")}
+															</span>
+															<span className="text-muted-foreground">
+																{formatDuration(
+																	segment.segEnd.diff(
+																		segment.segStart,
+																		"second",
+																	),
+																)}
+															</span>
+														</div>
+													</TooltipContent>
+												</Tooltip>
+											))}
+										</div>
+										<span className="w-20 shrink-0 text-right text-xs">
+											{formatDuration(day.online_seconds)}
+										</span>
+									</div>
+								);
+							})}
+						</div>
+					</TooltipProvider>
 				</CardContent>
 			</Card>
 
