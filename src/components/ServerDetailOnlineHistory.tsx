@@ -71,7 +71,7 @@ function DaysSelector({
 							}
 						}}
 						className={cn(
-							"relative cursor-pointer rounded-full px-3 py-1.5 text-xs font-medium transition-colors duration-300",
+							"relative z-20 cursor-pointer rounded-full px-3 py-1.5 text-xs font-medium transition-colors duration-300",
 							selectedDays === days
 								? "text-foreground"
 								: "text-muted-foreground hover:text-foreground",
