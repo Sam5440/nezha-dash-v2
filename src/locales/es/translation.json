@@ -86,7 +86,8 @@
 	},
 	"tabSwitch": {
 		"Detail": "Detalle",
-		"Network": "Red"
+		"Network": "Red",
+		"Online": "Online"
 	},
 	"monitor": {
 		"avgDelay": "Latencia",
@@ -155,5 +156,18 @@
 			"up_total": "Subida total",
 			"down_total": "Bajada total"
 		}
+	},
+	"serverOnlineHistory": {
+		"days1": "1d",
+		"days7": "7d",
+		"days30": "30d",
+		"onlineRate": "Online rate",
+		"totalOnline": "Online in window",
+		"lastActive": "Last active",
+		"dailyOnline": "Daily online time",
+		"periods": "Online periods",
+		"ongoing": "Ongoing",
+		"noData": "No online records",
+		"loginRequired": "This window requires login; guests can switch to 1d"
 	}
 }

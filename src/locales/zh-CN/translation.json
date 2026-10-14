@@ -113,7 +113,8 @@
 	},
 	"tabSwitch": {
 		"Detail": "详情",
-		"Network": "网络"
+		"Network": "网络",
+		"Online": "在线"
 	},
 	"monitor": {
 		"noData": "没有服务监控数据，请在管理后台服务页添加监控任务",
@@ -168,5 +169,18 @@
 	},
 	"group": {
 		"all": "全部"
+	},
+	"serverOnlineHistory": {
+		"days1": "1 天",
+		"days7": "7 天",
+		"days30": "30 天",
+		"onlineRate": "在线率",
+		"totalOnline": "统计窗口内在线",
+		"lastActive": "最后活跃",
+		"dailyOnline": "每日在线时长",
+		"periods": "在线时间段",
+		"ongoing": "进行中",
+		"noData": "暂无在线记录",
+		"loginRequired": "当前窗口需要登录后查看，游客可切换到 1 天"
 	}
 }

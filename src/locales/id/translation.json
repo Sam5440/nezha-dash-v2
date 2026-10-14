@@ -112,7 +112,8 @@
 	},
 	"tabSwitch": {
 		"Detail": "Detail",
-		"Network": "Jaringan"
+		"Network": "Jaringan",
+		"Online": "Online"
 	},
 	"monitor": {
 		"noData": "Tidak ada data pemantauan server, harap tambahkan pemantauan layanan terlebih dahulu",
@@ -167,5 +168,18 @@
 	},
 	"group": {
 		"all": "Semua"
+	},
+	"serverOnlineHistory": {
+		"days1": "1d",
+		"days7": "7d",
+		"days30": "30d",
+		"onlineRate": "Online rate",
+		"totalOnline": "Online in window",
+		"lastActive": "Last active",
+		"dailyOnline": "Daily online time",
+		"periods": "Online periods",
+		"ongoing": "Ongoing",
+		"noData": "No online records",
+		"loginRequired": "This window requires login; guests can switch to 1d"
 	}
 }

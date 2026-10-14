@@ -90,7 +90,8 @@
 	},
 	"tabSwitch": {
 		"Detail": "விவரம்",
-		"Network": "பிணையம்"
+		"Network": "பிணையம்",
+		"Online": "Online"
 	},
 	"monitor": {
 		"noData": "சேவையக மானிட்டர் தரவு இல்லை, முதலில் ஒரு பணி மானிட்டரைச் சேர்க்கவும்",
@@ -140,5 +141,18 @@
 			"up_total": "மொத்த பதிவேற்றம்",
 			"down_total": "மொத்த பதிவிறக்கம்"
 		}
+	},
+	"serverOnlineHistory": {
+		"days1": "1d",
+		"days7": "7d",
+		"days30": "30d",
+		"onlineRate": "Online rate",
+		"totalOnline": "Online in window",
+		"lastActive": "Last active",
+		"dailyOnline": "Daily online time",
+		"periods": "Online periods",
+		"ongoing": "Ongoing",
+		"noData": "No online records",
+		"loginRequired": "This window requires login; guests can switch to 1d"
 	}
 }

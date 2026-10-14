@@ -102,7 +102,8 @@
 	},
 	"tabSwitch": {
 		"Detail": "Detalle",
-		"Network": "Rede"
+		"Network": "Rede",
+		"Online": "Online"
 	},
 	"monitor": {
 		"noData": "Non hai datos de monitor de servidor. Engada primeiro un monitor de servizo",
@@ -133,5 +134,18 @@
 	"ToggleLightMode": "Cambiar ao modo claro",
 	"ToggleDarkMode": "Cambiar ao modo escuro",
 	"ToggleSystemMode": "Cambiar ao determinado polo sistema",
-	"Home": "Páxina principal"
+	"Home": "Páxina principal",
+	"serverOnlineHistory": {
+		"days1": "1d",
+		"days7": "7d",
+		"days30": "30d",
+		"onlineRate": "Online rate",
+		"totalOnline": "Online in window",
+		"lastActive": "Last active",
+		"dailyOnline": "Daily online time",
+		"periods": "Online periods",
+		"ongoing": "Ongoing",
+		"noData": "No online records",
+		"loginRequired": "This window requires login; guests can switch to 1d"
+	}
 }

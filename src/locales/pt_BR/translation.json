@@ -112,7 +112,8 @@
 	},
 	"tabSwitch": {
 		"Detail": "Detalhes",
-		"Network": "Rede"
+		"Network": "Rede",
+		"Online": "Online"
 	},
 	"monitor": {
 		"noData": "Sem servidores para monitorar. por favor adicione um primeiro monitor de serviço",
@@ -163,5 +164,18 @@
 	},
 	"group": {
 		"all": "Todos"
+	},
+	"serverOnlineHistory": {
+		"days1": "1d",
+		"days7": "7d",
+		"days30": "30d",
+		"onlineRate": "Online rate",
+		"totalOnline": "Online in window",
+		"lastActive": "Last active",
+		"dailyOnline": "Daily online time",
+		"periods": "Online periods",
+		"ongoing": "Ongoing",
+		"noData": "No online records",
+		"loginRequired": "This window requires login; guests can switch to 1d"
 	}
 }
