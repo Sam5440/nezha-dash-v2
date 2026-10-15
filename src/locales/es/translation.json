@@ -168,6 +168,11 @@
 		"periods": "Online periods",
 		"ongoing": "Ongoing",
 		"noData": "No online records",
-		"loginRequired": "This window requires login; guests can switch to 1d"
+		"loginRequired": "This window requires login; guests can switch to 1d",
+		"offlinePeriods": "Offline periods",
+		"periodsOnline": "Online",
+		"periodsOffline": "Offline",
+		"expandMore": "Expand more",
+		"today": "Today"
 	}
 }

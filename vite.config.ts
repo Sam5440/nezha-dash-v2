@@ -4,6 +4,16 @@ import path from "node:path";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
 
+// Node ≥25 默认启用实验性 webstorage：其全局 localStorage 在无有效存储文件时
+// 会遮蔽 jsdom 注入的同名全局（localStorage.clear 变为非函数）。测试 worker
+// 进程统一禁用，保证 jsdom 的 storage 生效。
+process.env.NODE_OPTIONS = [
+	process.env.NODE_OPTIONS,
+	"--no-experimental-webstorage",
+]
+	.filter(Boolean)
+	.join(" ");
+
 // Get git commit hash
 const getGitHash = () => {
 	try {

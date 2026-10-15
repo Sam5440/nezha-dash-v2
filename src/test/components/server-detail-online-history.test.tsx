@@ -77,6 +77,7 @@ describe("ServerDetailOnlineHistory", () => {
 	});
 
 	it("renders summary, daily breakdown, and periods from the API", async () => {
+		const user = userEvent.setup();
 		apiMocks.fetchServerOnlineHistory.mockResolvedValue(
 			onlineHistoryResponse(),
 		);
@@ -86,14 +87,18 @@ describe("ServerDetailOnlineHistory", () => {
 		expect(
 			await screen.findByText("serverOnlineHistory.dailyOnline"),
 		).toBeInTheDocument();
-		expect(screen.getByText("online")).toBeInTheDocument();
+		// 概要状态灯 + 最近一天组头各一次 "online"
+		expect(screen.getAllByText("online")).toHaveLength(2);
 		expect(screen.getByText("0.9%")).toBeInTheDocument();
-		// 总时长、2026-10-13 日行、第一个时间段时长均为 5400s
-		expect(screen.getAllByText("1h 30m").length).toBe(3);
-		expect(screen.getByText("2026-10-13")).toBeInTheDocument();
-		expect(screen.getByText("2026-10-14")).toBeInTheDocument();
-		// 进行中 Badge 精确匹配；时间段行的箭头表明进行中会话已渲染
-		expect(screen.getByText("serverOnlineHistory.ongoing")).toBeInTheDocument();
+		// 时间段卡默认只显示最近一天：汇总与 2026-10-13 日行各一次 1h 30m
+		expect(screen.getAllByText("1h 30m")).toHaveLength(2);
+		// 2026-10-14 组：日行、组头合计与 chip 时长均为 3600s
+		expect(screen.getAllByText("1h 0m")).toHaveLength(3);
+		expect(screen.queryByText("10-13")).not.toBeInTheDocument();
+		// 展开更多后显示 2026-10-13 分组（组头 + chip 各一次 1h 30m）
+		await user.click(screen.getByText("serverOnlineHistory.expandMore"));
+		expect(screen.getByText("10-13")).toBeInTheDocument();
+		expect(screen.getAllByText("1h 30m")).toHaveLength(4);
 		expect(screen.getAllByText(/→/).length).toBe(2);
 	});
 
@@ -173,5 +178,136 @@ describe("ServerDetailOnlineHistory", () => {
 		expect(
 			await screen.findByText("serverOnlineHistory.loginRequired"),
 		).toBeInTheDocument();
+	});
+
+	it("falls back to one day and retries automatically for guests", async () => {
+		const user = userEvent.setup();
+		apiMocks.fetchServerOnlineHistory
+			.mockRejectedValueOnce(
+				new Error("unauthorized: only 1d data available for guests"),
+			)
+			.mockResolvedValue(onlineHistoryResponse());
+
+		renderWithQuery(<ServerDetailOnlineHistory server_id="7" />);
+
+		// 首次 7d 被拒后自动以 1d 重试并渲染数据
+		await screen.findByText("serverOnlineHistory.dailyOnline");
+		await waitFor(() => {
+			expect(apiMocks.fetchServerOnlineHistory).toHaveBeenNthCalledWith(
+				2,
+				7,
+				1,
+			);
+		});
+
+		// 更长窗口被锁定（游客上限 1 天），点击不再发起新请求
+		const calls = apiMocks.fetchServerOnlineHistory.mock.calls.length;
+		await user.click(screen.getByText("serverOnlineHistory.days30"));
+		expect(apiMocks.fetchServerOnlineHistory).toHaveBeenNthCalledWith(2, 7, 1);
+		expect(apiMocks.fetchServerOnlineHistory.mock.calls.length).toBe(calls);
+	});
+
+	it("groups periods by the panel timezone from the response", async () => {
+		const data = onlineHistoryResponse().data;
+		// 面板时区非 UTC 才能暴露 dayjs .tz(input, zone) 忽略显式偏移的问题
+		data.timezone = "Asia/Shanghai";
+		data.daily = [{ date: "2026-01-02", online_seconds: 7200 }];
+		data.periods = [
+			{
+				start: "2026-01-01T20:00:00.000Z",
+				end: "2026-01-01T22:00:00.000Z",
+				ongoing: false,
+			},
+		];
+		apiMocks.fetchServerOnlineHistory.mockResolvedValue({
+			success: true,
+			data,
+		});
+
+		renderWithQuery(<ServerDetailOnlineHistory server_id="7" />);
+		await screen.findByText("serverOnlineHistory.dailyOnline");
+
+		// 20:00Z 在面板时区（UTC+8）为 01-02 04:00：分组落到 01-02，段内时刻同步换算
+		expect(screen.getByText("01-02")).toBeInTheDocument();
+		expect(screen.queryByText("01-01")).not.toBeInTheDocument();
+		const chip = screen.getByTestId("period-chip");
+		expect(chip.textContent).toContain("04:00");
+		expect(chip.textContent).toContain("06:00");
+	});
+
+	it("expands online periods ten days per click starting from the latest day", async () => {
+		const user = userEvent.setup();
+		const data = onlineHistoryResponse().data;
+		const dates = Array.from({ length: 25 }, (_, i) =>
+			dayjs("2026-10-14").subtract(i, "day").format("YYYY-MM-DD"),
+		);
+		data.daily = dates.map((date) => ({ date, online_seconds: 3600 }));
+		data.periods = dates.map((date) => ({
+			start: `${date}T06:00:00.000Z`,
+			end: `${date}T07:00:00.000Z`,
+			ongoing: false,
+		}));
+		apiMocks.fetchServerOnlineHistory.mockResolvedValue({
+			success: true,
+			data,
+		});
+
+		renderWithQuery(<ServerDetailOnlineHistory server_id="7" />);
+		await screen.findByText("serverOnlineHistory.dailyOnline");
+
+		expect(screen.getAllByTestId("period-day")).toHaveLength(1);
+
+		await user.click(screen.getByText("serverOnlineHistory.expandMore"));
+		expect(screen.getAllByTestId("period-day")).toHaveLength(11);
+
+		await user.click(screen.getByText("serverOnlineHistory.expandMore"));
+		expect(screen.getAllByTestId("period-day")).toHaveLength(21);
+
+		await user.click(screen.getByText("serverOnlineHistory.expandMore"));
+		expect(screen.getAllByTestId("period-day")).toHaveLength(25);
+		expect(
+			screen.queryByText("serverOnlineHistory.expandMore"),
+		).not.toBeInTheDocument();
+	});
+
+	it("derives offline periods as the complement of online sessions", async () => {
+		const user = userEvent.setup();
+		const data = onlineHistoryResponse().data;
+		data.window_start = "2026-10-14T00:00:00.000Z";
+		data.window_end = "2026-10-14T12:00:00.000Z";
+		data.currently_online = false;
+		data.daily = [{ date: "2026-10-14", online_seconds: 7200 }];
+		data.periods = [
+			{
+				start: "2026-10-14T02:00:00.000Z",
+				end: "2026-10-14T04:00:00.000Z",
+				ongoing: false,
+			},
+		];
+		apiMocks.fetchServerOnlineHistory.mockResolvedValue({
+			success: true,
+			data,
+		});
+
+		renderWithQuery(<ServerDetailOnlineHistory server_id="7" />);
+		await screen.findByText("serverOnlineHistory.dailyOnline");
+
+		await user.click(screen.getByText("serverOnlineHistory.periodsOffline"));
+
+		// 在线 02:00-04:00 两侧的空档各成一段，且服务器当前离线 → 末段进行中
+		const chips = screen.getAllByTestId("period-chip");
+		expect(chips).toHaveLength(2);
+		expect(chips[1].textContent).toContain("serverOnlineHistory.ongoing");
+
+		// 组头合计 = 窗口截断时长 − 当日在线时长（按时区计算，与时区无关）
+		const windowSeconds = dayjs("2026-10-14T12:00:00.000Z").diff(
+			dayjs("2026-10-14").startOf("day"),
+			"second",
+		);
+		const totalSeconds = windowSeconds - 7200;
+		const h = Math.floor(totalSeconds / 3600);
+		const m = Math.floor((totalSeconds % 3600) / 60);
+		const expected = h > 0 ? `${h}h ${m}m` : `${m}m`;
+		expect(screen.getByText(expected)).toBeInTheDocument();
 	});
 });

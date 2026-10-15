@@ -222,6 +222,8 @@ export interface OnlineHistoryData {
 	server_name: string;
 	days: number;
 	max_days: number;
+	/** 面板时区（Daily 拆日的日界），前端按同一时区渲染 */
+	timezone?: string;
 	window_start: string;
 	window_end: string;
 	total_online_seconds: number;

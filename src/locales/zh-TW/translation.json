@@ -183,6 +183,11 @@
 		"periods": "線上時間段",
 		"ongoing": "進行中",
 		"noData": "暫無線上紀錄",
-		"loginRequired": "此視窗需要登入後查看，訪客可切換到 1 天"
+		"loginRequired": "此視窗需要登入後查看，訪客可切換到 1 天",
+		"offlinePeriods": "Offline periods",
+		"periodsOnline": "Online",
+		"periodsOffline": "Offline",
+		"expandMore": "Expand more",
+		"today": "Today"
 	}
 }

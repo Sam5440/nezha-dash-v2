@@ -181,6 +181,11 @@
 		"periods": "在线时间段",
 		"ongoing": "进行中",
 		"noData": "暂无在线记录",
-		"loginRequired": "当前窗口需要登录后查看，游客可切换到 1 天"
+		"loginRequired": "当前窗口需要登录后查看，游客可切换到 1 天",
+		"offlinePeriods": "不在线时间段",
+		"periodsOnline": "在线时间段",
+		"periodsOffline": "不在线时间段",
+		"expandMore": "展开更多",
+		"today": "今天"
 	}
 }
