@@ -1,7 +1,4 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import dayjs from "dayjs";
-import timezone from "dayjs/plugin/timezone";
-import utc from "dayjs/plugin/utc";
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -16,11 +13,17 @@ import {
 import { useActiveIndicator } from "@/hooks/use-active-indicator";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { fetchServerOnlineHistory } from "@/lib/nezha-api";
+import {
+	buildDaySegments,
+	buildOfflineGroups,
+	formatDuration,
+	formatPeriodMoment,
+	groupOnlinePeriods,
+	panelDay,
+	panelNow,
+} from "@/lib/online-history";
 import { cn } from "@/lib/utils";
-import type { DailyOnlineStat, OnlinePeriod } from "@/types/nezha-api";
-
-dayjs.extend(utc);
-dayjs.extend(timezone);
+import type { DailyOnlineStat } from "@/types/nezha-api";
 
 const DAY_OPTIONS = [1, 7, 30];
 // Online periods 默认只展开最近 1 天，每次「展开更多」追加 10 天
@@ -28,49 +31,6 @@ const PERIODS_INITIAL_DAYS = 1;
 const PERIODS_EXPAND_STEP = 10;
 
 type PeriodMode = "online" | "offline";
-
-type PeriodChip = {
-	start: dayjs.Dayjs;
-	end: dayjs.Dayjs;
-	ongoing: boolean;
-};
-
-type PeriodDayGroup = {
-	date: string;
-	day: dayjs.Dayjs;
-	total: number;
-	chips: PeriodChip[];
-};
-
-// 后端按面板时区拆日；响应带 timezone 时前端用同一时区解释时间，
-// 保证跨时区访客的时间轴、分组与每日数字一致
-function panelDay(value: string, tz?: string): dayjs.Dayjs {
-	// dayjs 的 .tz(input, zone) 解析模式会忽略输入里的显式偏移（Z / ±HH:MM）：
-	// 带偏移的时间戳须先按原义解析再换算时区，无偏移的日期串才用 zone 解析
-	if (tz) {
-		return /(?:Z|[+-]\d{2}:?\d{2})$/i.test(value)
-			? dayjs(value).tz(tz)
-			: dayjs.tz(value, tz);
-	}
-	return dayjs(value);
-}
-
-function panelNow(tz?: string): dayjs.Dayjs {
-	return tz ? dayjs().tz(tz) : dayjs();
-}
-
-function formatDuration(seconds: number): string {
-	const d = Math.floor(seconds / 86400);
-	const h = Math.floor((seconds % 86400) / 3600);
-	const m = Math.floor((seconds % 3600) / 60);
-	if (d > 0) {
-		return `${d}d ${h}h ${m}m`;
-	}
-	if (h > 0) {
-		return `${h}h ${m}m`;
-	}
-	return `${m}m`;
-}
 
 // 概要卡的小方块标签；accent 用于在线率等需要突出的指标
 function SummaryLabel({
@@ -183,157 +143,6 @@ function RateSparkline({
 	);
 }
 
-// 把一天映射到 0:00–24:00 整轴：裁剪出该日与每个时间段的交集，
-// 换算成轨道内的百分比坐标。
-function buildDaySegments(periods: OnlinePeriod[], date: string, tz?: string) {
-	const dayStart = panelDay(date, tz);
-	const dayEnd = dayStart.add(1, "day");
-	return periods
-		.map((period) => {
-			const start = panelDay(period.start, tz);
-			const end = panelDay(period.end, tz);
-			const segStart = start.isAfter(dayStart) ? start : dayStart;
-			const segEnd = end.isBefore(dayEnd) ? end : dayEnd;
-			const leftPct = Math.max(
-				0,
-				(segStart.diff(dayStart, "second") / 86400) * 100,
-			);
-			const widthPct = Math.min(
-				Math.max(0, (segEnd.diff(segStart, "second") / 86400) * 100),
-				100 - leftPct,
-			);
-			return { period, segStart, segEnd, leftPct, widthPct };
-		})
-		.filter((segment) => segment.widthPct > 0);
-}
-
-// 合并重叠/相邻的时间段，按开始时间排序
-function mergePeriods(periods: OnlinePeriod[], tz?: string): PeriodChip[] {
-	const sorted = periods
-		.map((period) => ({
-			start: panelDay(period.start, tz),
-			end: panelDay(period.end, tz),
-			ongoing: period.ongoing,
-		}))
-		.sort((a, b) => a.start.valueOf() - b.start.valueOf());
-	const merged: PeriodChip[] = [];
-	for (const period of sorted) {
-		const last = merged[merged.length - 1];
-		if (last && period.start.isBefore(last.end)) {
-			if (period.end.isAfter(last.end)) {
-				last.end = period.end;
-			}
-			last.ongoing = last.ongoing || period.ongoing;
-		} else {
-			merged.push({ ...period });
-		}
-	}
-	return merged;
-}
-
-// 在线模式：按开始日分组（跨天时段归入开始日），合计优先取接口的当日在线秒数
-function groupOnlinePeriods(
-	periods: OnlinePeriod[],
-	daily: DailyOnlineStat[],
-	tz?: string,
-): PeriodDayGroup[] {
-	const secondsByDate = new Map(
-		daily.map((day) => [day.date, day.online_seconds]),
-	);
-	const byDate = new Map<string, PeriodChip[]>();
-	for (const period of periods) {
-		const date = panelDay(period.start, tz).format("YYYY-MM-DD");
-		const chip: PeriodChip = {
-			start: panelDay(period.start, tz),
-			end: panelDay(period.end, tz),
-			ongoing: period.ongoing,
-		};
-		const chips = byDate.get(date);
-		if (chips) {
-			chips.push(chip);
-		} else {
-			byDate.set(date, [chip]);
-		}
-	}
-	return [...byDate.entries()]
-		.sort((a, b) => (a[0] < b[0] ? 1 : -1))
-		.map(([date, chips]) => ({
-			date,
-			day: panelDay(date, tz),
-			total:
-				secondsByDate.get(date) ??
-				chips.reduce(
-					(sum, chip) => sum + chip.end.diff(chip.start, "second"),
-					0,
-				),
-			chips,
-		}));
-}
-
-// 离线模式：对窗口内每一天求在线时段的补集；服务器当前离线时，最新一天的末段标记为进行中
-function buildOfflineGroups(
-	periods: OnlinePeriod[],
-	daily: DailyOnlineStat[],
-	windowEnd: string,
-	currentlyOnline: boolean,
-	tz?: string,
-): PeriodDayGroup[] {
-	const merged = mergePeriods(periods, tz);
-	const secondsByDate = new Map(
-		daily.map((day) => [day.date, day.online_seconds]),
-	);
-	const windowEndTime = panelDay(windowEnd, tz);
-	const groups: PeriodDayGroup[] = daily
-		.map((day) => day.date)
-		.sort((a, b) => (a < b ? 1 : -1))
-		.map((date) => {
-			const dayStart = panelDay(date, tz);
-			const dayEnd = dayStart.add(1, "day");
-			const clippedEnd = dayEnd.isAfter(windowEndTime) ? windowEndTime : dayEnd;
-			const chips: PeriodChip[] = [];
-			let cursor = dayStart;
-			for (const segment of merged) {
-				if (segment.end.isBefore(cursor) || !segment.end.isAfter(dayStart)) {
-					continue;
-				}
-				const segStart = segment.start.isAfter(dayStart)
-					? segment.start
-					: dayStart;
-				if (segStart.isAfter(cursor)) {
-					chips.push({ start: cursor, end: segStart, ongoing: false });
-				}
-				const segEnd = segment.end.isBefore(clippedEnd)
-					? segment.end
-					: clippedEnd;
-				if (segEnd.isAfter(cursor)) {
-					cursor = segEnd;
-				}
-			}
-			if (cursor.isBefore(clippedEnd)) {
-				chips.push({ start: cursor, end: clippedEnd, ongoing: false });
-			}
-			const windowSeconds = clippedEnd.diff(dayStart, "second");
-			const total = Math.max(
-				0,
-				windowSeconds -
-					(secondsByDate.get(date) ??
-						chips.reduce(
-							(sum, chip) => sum + chip.end.diff(chip.start, "second"),
-							0,
-						)),
-			);
-			return { date, day: dayStart, total, chips };
-		})
-		.filter((group) => group.chips.length > 0);
-	if (!currentlyOnline && groups.length > 0) {
-		const newest = groups[0].chips;
-		if (newest.length > 0) {
-			newest[newest.length - 1].ongoing = true;
-		}
-	}
-	return groups;
-}
-
 function DaysSelector({
 	selectedDays,
 	maxDays,
@@ -350,6 +159,7 @@ function DaysSelector({
 	return (
 		<div
 			ref={containerRef}
+			data-testid="days-selector"
 			className="relative flex gap-0.5 flex-wrap p-0.5 bg-muted dark:bg-muted/40 rounded-full w-fit border border-border/60 dark:border-border"
 		>
 			{indicator && (
@@ -412,6 +222,7 @@ function PeriodsModeSwitch({
 	return (
 		<div
 			ref={containerRef}
+			data-testid="period-mode-switch"
 			className="relative flex gap-0.5 p-0.5 bg-muted dark:bg-muted/40 rounded-full w-fit border border-border/60 dark:border-border"
 		>
 			{indicator && (
@@ -684,10 +495,7 @@ export default function ServerDetailOnlineHistory({
 															data-testid="online-segment"
 															className={cn(
 																"absolute inset-y-0 cursor-pointer rounded-sm bg-green-500 transition-colors hover:bg-green-400",
-																segment.period.ongoing &&
-																	segment.segEnd.isSame(
-																		dayjs(segment.period.end),
-																	) &&
+																segment.live &&
 																	"bg-green-400 dark:bg-green-500",
 															)}
 															style={{
@@ -702,9 +510,14 @@ export default function ServerDetailOnlineHistory({
 															<span>
 																{segment.segStart.format("HH:mm:ss")}
 																{" → "}
-																{segment.period.ongoing
+																{segment.live
 																	? t("serverOnlineHistory.ongoing")
-																	: segment.segEnd.format("HH:mm:ss")}
+																	: formatPeriodMoment(
+																			segment.segEnd,
+																			segment.segStart,
+																			tz,
+																			true,
+																		)}
 															</span>
 															<span className="text-muted-foreground">
 																{formatDuration(
@@ -751,10 +564,11 @@ export default function ServerDetailOnlineHistory({
 						}
 						const groups =
 							periodMode === "online"
-								? groupOnlinePeriods(online.periods, online.daily, tz)
+								? groupOnlinePeriods(online.periods, tz)
 								: buildOfflineGroups(
 										online.periods,
 										online.daily,
+										online.window_start,
 										online.window_end,
 										online.currently_online,
 										tz,
@@ -796,7 +610,7 @@ export default function ServerDetailOnlineHistory({
 																<span
 																	data-testid="period-chip"
 																	className={cn(
-																		"inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs tabular-nums transition-colors cursor-pointer",
+																		"inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-2 py-1 text-xs tabular-nums transition-colors cursor-pointer",
 																		chip.ongoing
 																			? "border-green-500/30 bg-green-500/15 text-green-500"
 																			: "border-border/60 dark:border-border bg-muted/50 dark:bg-muted/30 text-foreground hover:bg-muted dark:hover:bg-muted/50",
@@ -809,7 +623,11 @@ export default function ServerDetailOnlineHistory({
 																	{" → "}
 																	{chip.ongoing
 																		? t("serverOnlineHistory.ongoing")
-																		: chip.end.format("HH:mm")}
+																		: formatPeriodMoment(
+																				chip.end,
+																				chip.start,
+																				tz,
+																			)}
 																	<span className="text-muted-foreground">
 																		{formatDuration(seconds)}
 																	</span>
@@ -820,7 +638,12 @@ export default function ServerDetailOnlineHistory({
 																{" → "}
 																{chip.ongoing
 																	? t("serverOnlineHistory.ongoing")
-																	: chip.end.format("HH:mm:ss")}
+																	: formatPeriodMoment(
+																			chip.end,
+																			chip.start,
+																			tz,
+																			true,
+																		)}
 																{" · "}
 																{formatDuration(seconds)}
 															</TooltipContent>
@@ -833,6 +656,7 @@ export default function ServerDetailOnlineHistory({
 									{groups.length > visibleDays && (
 										<button
 											type="button"
+											data-testid="periods-expand"
 											onClick={() =>
 												setVisibleDays((d) => d + PERIODS_EXPAND_STEP)
 											}

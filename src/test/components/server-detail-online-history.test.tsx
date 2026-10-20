@@ -24,8 +24,9 @@ function onlineHistoryResponse(maxDays = 30): OnlineHistoryResponse {
 			server_name: "edge-online",
 			days: 7,
 			max_days: maxDays,
+			timezone: "UTC",
 			window_start: "2026-10-07T04:00:00.000Z",
-			window_end: "2026-10-14T04:00:00.000Z",
+			window_end: "2026-10-14T12:00:00.000Z",
 			total_online_seconds: 5400,
 			online_rate: 0.89,
 			currently_online: true,
@@ -109,28 +110,17 @@ describe("ServerDetailOnlineHistory", () => {
 
 		renderWithQuery(<ServerDetailOnlineHistory server_id="7" />);
 
-		expect(await screen.findByText("0:00 – 24:00")).toBeInTheDocument();
+		expect(await screen.findByText(/0:00 – 24:00/)).toBeInTheDocument();
 
-		// 每个时间段按当日起点换算为百分比坐标（与时区无关）
+		// 时间轴按面板时区（UTC）的挂钟定位：08:00 在 33.33%，1.5h 宽 6.25%
 		const segments = await screen.findAllByTestId("online-segment");
 		expect(segments).toHaveLength(2);
-		const dayStart = dayjs("2026-10-13").startOf("day");
-		const startPct =
-			(dayjs("2026-10-13T08:00:00.000Z").diff(dayStart, "second") / 86400) *
-			100;
-		const widthPct =
-			(dayjs("2026-10-13T09:30:00.000Z").diff(
-				"2026-10-13T08:00:00.000Z",
-				"second",
-			) /
-				86400) *
-			100;
 		expect(Number.parseFloat(segments[0].style.left)).toBeCloseTo(
-			Math.max(0, startPct),
+			(8 / 24) * 100,
 			2,
 		);
 		expect(Number.parseFloat(segments[0].style.width)).toBeCloseTo(
-			Math.min(100, widthPct),
+			(1.5 / 24) * 100,
 			2,
 		);
 		expect(segments[0].style.minWidth).toBe("2px");
@@ -325,17 +315,13 @@ describe("ServerDetailOnlineHistory", () => {
 		// 在线 02:00-04:00 两侧的空档各成一段，且服务器当前离线 → 末段进行中
 		const chips = screen.getAllByTestId("period-chip");
 		expect(chips).toHaveLength(2);
+		expect(chips[0].textContent).toContain("00:00");
+		expect(chips[0].textContent).toContain("2h 0m");
+		expect(chips[1].textContent).toContain("04:00");
+		expect(chips[1].textContent).toContain("8h 0m");
 		expect(chips[1].textContent).toContain("serverOnlineHistory.ongoing");
 
-		// 组头合计 = 窗口截断时长 − 当日在线时长（按时区计算，与时区无关）
-		const windowSeconds = dayjs("2026-10-14T12:00:00.000Z").diff(
-			dayjs("2026-10-14").startOf("day"),
-			"second",
-		);
-		const totalSeconds = windowSeconds - 7200;
-		const h = Math.floor(totalSeconds / 3600);
-		const m = Math.floor((totalSeconds % 3600) / 60);
-		const expected = h > 0 ? `${h}h ${m}m` : `${m}m`;
-		expect(screen.getByText(expected)).toBeInTheDocument();
+		// 组头合计 = 窗口时长 12h − 当日在线 2h = 10h
+		expect(screen.getByText("10h 0m")).toBeInTheDocument();
 	});
 });
