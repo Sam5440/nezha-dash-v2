@@ -54,6 +54,26 @@ function SummaryLabel({
 	);
 }
 
+// 桌面概要条的单个指标：不使用独立灰底盒子，整条更轻
+function SummaryMetric({
+	label,
+	children,
+	className,
+}: {
+	label: ReactNode;
+	children: ReactNode;
+	className?: string;
+}) {
+	return (
+		<div className={cn("flex min-w-0 flex-col items-start gap-1.5", className)}>
+			<span className="text-[11px] font-medium leading-4 text-muted-foreground">
+				{label}
+			</span>
+			{children}
+		</div>
+	);
+}
+
 // 概要卡的信息盒：标签在上、数值在下
 function SummaryBox({
 	label,
@@ -360,15 +380,15 @@ export default function ServerDetailOnlineHistory({
 								className="flex flex-col gap-3"
 								data-testid="summary-desktop"
 							>
-								<div className="grid grid-cols-3 gap-2.5">
-									<SummaryBox
+								<div className="grid grid-cols-3 divide-x divide-border/60">
+									<SummaryMetric
 										label={t("serverOnlineHistory.onlineRate")}
-										accent
+										className="pr-6"
 									>
-										<span className="text-lg font-medium tabular-nums text-foreground">
+										<span className="text-2xl font-medium tabular-nums text-foreground">
 											{online.online_rate.toFixed(1)}%
 										</span>
-										<div className="h-1 w-full overflow-hidden rounded-full bg-muted dark:bg-muted/40">
+										<div className="mt-0.5 h-1 w-24 overflow-hidden rounded-full bg-muted dark:bg-muted/40">
 											<div
 												className="h-full rounded-full bg-green-500"
 												style={{
@@ -376,16 +396,22 @@ export default function ServerDetailOnlineHistory({
 												}}
 											/>
 										</div>
-									</SummaryBox>
-									<SummaryBox label={t("serverOnlineHistory.totalOnline")}>
-										<span className="text-lg font-medium tabular-nums text-foreground">
+									</SummaryMetric>
+									<SummaryMetric
+										label={t("serverOnlineHistory.totalOnline")}
+										className="px-6"
+									>
+										<span className="text-2xl font-medium tabular-nums text-foreground">
 											{formatDuration(online.total_online_seconds)}
 										</span>
-									</SummaryBox>
-									<SummaryBox label={t("serverOnlineHistory.lastActive")}>
+									</SummaryMetric>
+									<SummaryMetric
+										label={t("serverOnlineHistory.lastActive")}
+										className="pl-6"
+									>
 										{online.last_active ? (
 											<>
-												<span className="text-lg font-medium tabular-nums text-foreground">
+												<span className="text-2xl font-medium tabular-nums text-foreground">
 													{panelDay(online.last_active, tz).format("HH:mm:ss")}
 												</span>
 												<span className="text-[11px] leading-4 text-muted-foreground tabular-nums">
@@ -395,16 +421,12 @@ export default function ServerDetailOnlineHistory({
 												</span>
 											</>
 										) : (
-											<span className="text-lg font-medium text-foreground">
+											<span className="text-2xl font-medium text-foreground">
 												N/A
 											</span>
 										)}
-									</SummaryBox>
+									</SummaryMetric>
 								</div>
-								<RateSparkline
-									daily={online.daily}
-									className="w-full text-green-500"
-								/>
 							</div>
 						) : (
 							<div className="flex flex-col gap-3" data-testid="summary-mobile">
