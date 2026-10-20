@@ -2,11 +2,11 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import dayjs from "dayjs";
 import timezone from "dayjs/plugin/timezone";
 import utc from "dayjs/plugin/utc";
+import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import NetworkChartLoading from "@/components/NetworkChartLoading";
 import { Card, CardContent } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
 import {
 	Tooltip,
 	TooltipContent,
@@ -14,6 +14,7 @@ import {
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useActiveIndicator } from "@/hooks/use-active-indicator";
+import { useMediaQuery } from "@/hooks/use-media-query";
 import { fetchServerOnlineHistory } from "@/lib/nezha-api";
 import { cn } from "@/lib/utils";
 import type { DailyOnlineStat, OnlinePeriod } from "@/types/nezha-api";
@@ -69,6 +70,117 @@ function formatDuration(seconds: number): string {
 		return `${h}h ${m}m`;
 	}
 	return `${m}m`;
+}
+
+// 概要卡的小方块标签；accent 用于在线率等需要突出的指标
+function SummaryLabel({
+	children,
+	accent = false,
+}: {
+	children: ReactNode;
+	accent?: boolean;
+}) {
+	return (
+		<span
+			className={cn(
+				"self-start rounded-lg px-2 py-0.5 text-[11px] leading-4",
+				accent
+					? "bg-green-500/15 text-green-600 dark:text-green-500"
+					: "bg-muted text-muted-foreground dark:bg-muted/40",
+			)}
+		>
+			{children}
+		</span>
+	);
+}
+
+// 概要卡的信息盒：标签在上、数值在下
+function SummaryBox({
+	label,
+	accent = false,
+	children,
+}: {
+	label: ReactNode;
+	accent?: boolean;
+	children: ReactNode;
+}) {
+	return (
+		<div className="flex min-w-0 flex-col items-start gap-1.5 rounded-xl bg-muted/50 px-3 py-2.5 dark:bg-muted/30">
+			<SummaryLabel accent={accent}>{label}</SummaryLabel>
+			{children}
+		</div>
+	);
+}
+
+// 近 N 天每日在线率趋势：按 86400s 归一的迷你面积图，末点空心标记最新一天
+function RateSparkline({
+	daily,
+	className,
+	showRange = true,
+}: {
+	daily: DailyOnlineStat[];
+	className?: string;
+	showRange?: boolean;
+}) {
+	if (daily.length < 2) {
+		return null;
+	}
+	const width = 200;
+	const height = 48;
+	const pad = 4;
+	const rates = daily.map((day) =>
+		Math.max(0, Math.min(100, (day.online_seconds / 86400) * 100)),
+	);
+	const step = (width - pad * 2) / (rates.length - 1);
+	const pointY = (rate: number) => pad + (1 - rate / 100) * (height - pad * 2);
+	const points = rates
+		.map((rate, index) => `${pad + index * step},${pointY(rate).toFixed(1)}`)
+		.join(" ");
+	const lastY = pointY(rates[rates.length - 1]);
+	return (
+		<div className={cn("relative", className)}>
+			<svg
+				viewBox={`0 0 ${width} ${height}`}
+				preserveAspectRatio="none"
+				className="block h-12 w-full"
+				aria-hidden
+			>
+				<defs>
+					<linearGradient
+						id="online-rate-spark-fill"
+						x1="0"
+						y1="0"
+						x2="0"
+						y2="1"
+					>
+						<stop offset="0%" stopColor="currentColor" stopOpacity="0.25" />
+						<stop offset="100%" stopColor="currentColor" stopOpacity="0" />
+					</linearGradient>
+				</defs>
+				<polygon
+					points={`${pad},${height - pad} ${points} ${width - pad},${height - pad}`}
+					fill="url(#online-rate-spark-fill)"
+				/>
+				<polyline
+					points={points}
+					fill="none"
+					stroke="currentColor"
+					strokeWidth="1.5"
+					strokeLinejoin="round"
+					vectorEffect="non-scaling-stroke"
+				/>
+			</svg>
+			<span
+				className="absolute size-2 rounded-full border-2 border-green-500 bg-card"
+				style={{ right: 2, top: lastY - 4 }}
+			/>
+			{showRange && (
+				<span className="mt-1 block text-center text-[11px] leading-4 text-muted-foreground tabular-nums">
+					{daily[0].date} – {daily[daily.length - 1].date}
+				</span>
+			)}
+		</div>
+	);
 }
 
 // 把一天映射到 0:00–24:00 整轴：裁剪出该日与每个时间段的交集，
@@ -238,7 +350,7 @@ function DaysSelector({
 	return (
 		<div
 			ref={containerRef}
-			className="relative flex gap-0.5 mb-3 flex-wrap p-0.5 bg-muted dark:bg-muted/40 rounded-full w-fit border border-border/60 dark:border-border"
+			className="relative flex gap-0.5 flex-wrap p-0.5 bg-muted dark:bg-muted/40 rounded-full w-fit border border-border/60 dark:border-border"
 		>
 			{indicator && (
 				<div
@@ -355,6 +467,8 @@ export default function ServerDetailOnlineHistory({
 	const [guestMaxDays, setGuestMaxDays] = useState<number | null>(null);
 	const [periodMode, setPeriodMode] = useState<PeriodMode>("online");
 	const [visibleDays, setVisibleDays] = useState(PERIODS_INITIAL_DAYS);
+	// 概要卡在 md 断点切换：桌面为三盒等宽 + 全宽趋势条（F3），窄屏为大数字 + 双盒（F1）
+	const isDesktop = useMediaQuery("(min-width: 768px)");
 
 	const {
 		data: historyData,
@@ -399,86 +513,144 @@ export default function ServerDetailOnlineHistory({
 		<div className="flex flex-col gap-4">
 			<Card className={cn({ "bg-card/70": customBackgroundImage })}>
 				<CardContent className="px-6 py-3">
-					<DaysSelector
-						selectedDays={days}
-						maxDays={guestMaxDays ?? online?.max_days ?? DAY_OPTIONS[2]}
-						onDaysChange={setDays}
-					/>
+					<div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+						{online && (
+							<span
+								className={cn(
+									"inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium",
+									online.currently_online
+										? "bg-green-500/10 text-green-600 dark:text-green-500"
+										: "bg-muted text-muted-foreground",
+								)}
+							>
+								<span
+									className={cn(
+										"size-2 rounded-full",
+										online.currently_online ? "bg-green-500" : "bg-gray-400",
+									)}
+								/>
+								{online.currently_online ? t("online") : t("offline")}
+							</span>
+						)}
+						<DaysSelector
+							selectedDays={days}
+							maxDays={guestMaxDays ?? online?.max_days ?? DAY_OPTIONS[2]}
+							onDaysChange={setDays}
+						/>
+					</div>
 					{isError && !online ? (
 						<p className="text-xs text-muted-foreground">
 							{t("serverOnlineHistory.loginRequired")}
 						</p>
 					) : (
-						online && (
-							<>
-								<div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-xs">
-									<span className="flex items-center gap-1.5">
-										<span
-											className={cn(
-												"size-2 rounded-full",
-												online.currently_online
-													? "bg-green-500"
-													: "bg-gray-400",
-											)}
-										/>
-										{online.currently_online ? t("online") : t("offline")}
-									</span>
-									<span className="text-muted-foreground">
-										{t("serverOnlineHistory.onlineRate")}
-										{": "}
-										<span className="text-foreground">
+						online &&
+						(isDesktop ? (
+							<div
+								className="flex flex-col gap-3"
+								data-testid="summary-desktop"
+							>
+								<div className="grid grid-cols-3 gap-2.5">
+									<SummaryBox
+										label={t("serverOnlineHistory.onlineRate")}
+										accent
+									>
+										<span className="text-lg font-medium tabular-nums text-foreground">
 											{online.online_rate.toFixed(1)}%
 										</span>
-									</span>
-									<span className="text-muted-foreground">
-										{t("serverOnlineHistory.totalOnline")}
-										{": "}
-										<span className="text-foreground">
+										<div className="h-1 w-full overflow-hidden rounded-full bg-muted dark:bg-muted/40">
+											<div
+												className="h-full rounded-full bg-green-500"
+												style={{
+													width: `${Math.min(100, Math.max(0, online.online_rate))}%`,
+												}}
+											/>
+										</div>
+									</SummaryBox>
+									<SummaryBox label={t("serverOnlineHistory.totalOnline")}>
+										<span className="text-lg font-medium tabular-nums text-foreground">
 											{formatDuration(online.total_online_seconds)}
 										</span>
-									</span>
-									<span className="text-muted-foreground">
-										{t("serverOnlineHistory.lastActive")}
-										{": "}
-										<span className="text-foreground">
+									</SummaryBox>
+									<SummaryBox label={t("serverOnlineHistory.lastActive")}>
+										{online.last_active ? (
+											<>
+												<span className="text-lg font-medium tabular-nums text-foreground">
+													{panelDay(online.last_active, tz).format("HH:mm:ss")}
+												</span>
+												<span className="text-[11px] leading-4 text-muted-foreground tabular-nums">
+													{panelDay(online.last_active, tz).format(
+														"YYYY-MM-DD",
+													)}
+												</span>
+											</>
+										) : (
+											<span className="text-lg font-medium text-foreground">
+												N/A
+											</span>
+										)}
+									</SummaryBox>
+								</div>
+								<RateSparkline
+									daily={online.daily}
+									className="w-full text-green-500"
+								/>
+							</div>
+						) : (
+							<div className="flex flex-col gap-3" data-testid="summary-mobile">
+								<div className="flex items-center justify-between gap-4">
+									<div className="flex min-w-0 flex-col items-start gap-1.5">
+										<SummaryLabel accent>
+											{t("serverOnlineHistory.onlineRate")}
+										</SummaryLabel>
+										<span className="text-2xl font-medium tabular-nums text-foreground">
+											{online.online_rate.toFixed(1)}%
+										</span>
+									</div>
+									<RateSparkline
+										daily={online.daily}
+										showRange={false}
+										className="w-36 shrink-0 text-green-500"
+									/>
+								</div>
+								<div className="grid grid-cols-2 gap-2.5">
+									<SummaryBox label={t("serverOnlineHistory.totalOnline")}>
+										<span className="text-base font-medium tabular-nums text-foreground">
+											{formatDuration(online.total_online_seconds)}
+										</span>
+									</SummaryBox>
+									<SummaryBox label={t("serverOnlineHistory.lastActive")}>
+										<span className="text-base font-medium tabular-nums text-foreground">
 											{online.last_active
-												? panelDay(online.last_active, tz).format(
-														"YYYY-MM-DD HH:mm:ss",
-													)
+												? panelDay(online.last_active, tz).format("HH:mm:ss")
 												: "N/A"}
 										</span>
-									</span>
+										{online.last_active && (
+											<span className="text-[11px] leading-4 text-muted-foreground tabular-nums">
+												{panelDay(online.last_active, tz).format("YYYY-MM-DD")}
+											</span>
+										)}
+									</SummaryBox>
 								</div>
-								<Progress
-									value={online.online_rate}
-									indicatorClassName="bg-green-500"
-									className="h-[3px] rounded-sm mt-2.5"
-								/>
-							</>
-						)
+							</div>
+						))
 					)}
 				</CardContent>
 			</Card>
 
 			<Card className={cn({ "bg-card/70": customBackgroundImage })}>
 				<CardContent className="px-6 py-3">
-					<p className="text-xs font-medium text-muted-foreground">
-						{t("serverOnlineHistory.dailyOnline")}
-					</p>
-					{/* 0:00–24:00 共享时间轴刻度 */}
-					<div className="flex items-center gap-3 mt-2 text-[10px] text-muted-foreground/70">
-						<span className="w-24 shrink-0" aria-hidden />
-						<div className="relative h-3 flex-1">
-							<span className="absolute left-0 top-0">0:00</span>
-							<span className="absolute left-1/2 -translate-x-1/2 top-0">
-								12:00
-							</span>
-							<span className="absolute right-0 top-0">24:00</span>
-						</div>
-						<span className="w-20 shrink-0" aria-hidden />
+					<div className="flex flex-wrap items-center justify-between gap-2">
+						<p className="text-xs font-medium text-muted-foreground">
+							{t("serverOnlineHistory.dailyOnline")}
+						</p>
+						{/* 面板时区下的 0:00–24:00 挂钟轴 */}
+						<span className="rounded-lg bg-muted px-2 py-0.5 text-[11px] leading-4 text-muted-foreground tabular-nums dark:bg-muted/40">
+							0:00 – 24:00{tz ? ` · ${tz}` : ""}
+						</span>
 					</div>
 					<TooltipProvider delayDuration={100}>
-						<div className="flex flex-col gap-1.5 mt-1">
+						{/* 宽屏两列一行两日；末行为奇数时占满整行 */}
+						<div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2 md:gap-x-4 md:[&>*:last-child:nth-child(odd)]:col-span-2">
 							{online?.daily.map((day) => {
 								const segments = buildDaySegments(
 									online?.periods ?? [],
@@ -486,11 +658,23 @@ export default function ServerDetailOnlineHistory({
 									tz,
 								);
 								return (
-									<div key={day.date} className="flex items-center gap-3">
-										<span className="w-24 shrink-0 text-xs text-muted-foreground">
-											{day.date}
-										</span>
-										<div className="relative h-2 flex-1 rounded-sm bg-muted dark:bg-muted/40 overflow-hidden">
+									<div
+										key={day.date}
+										className="flex min-w-0 flex-col gap-1.5 rounded-lg bg-muted/40 px-2.5 py-2 dark:bg-muted/20"
+									>
+										<div className="flex items-baseline justify-between gap-2 text-xs">
+											<span className="text-foreground tabular-nums">
+												{day.date}
+											</span>
+											<span className="text-muted-foreground tabular-nums">
+												{formatDuration(day.online_seconds)}
+											</span>
+										</div>
+										<div className="relative h-2 overflow-hidden rounded-sm bg-muted dark:bg-muted/40">
+											<span
+												className="pointer-events-none absolute bottom-0 left-1/2 top-0 w-px bg-foreground/10"
+												aria-hidden
+											/>
 											{segments.map((segment) => (
 												<Tooltip
 													key={`${segment.leftPct}-${segment.period.start}`}
@@ -535,9 +719,6 @@ export default function ServerDetailOnlineHistory({
 												</Tooltip>
 											))}
 										</div>
-										<span className="w-20 shrink-0 text-right text-xs">
-											{formatDuration(day.online_seconds)}
-										</span>
 									</div>
 								);
 							})}

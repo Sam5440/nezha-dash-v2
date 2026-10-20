@@ -109,9 +109,7 @@ describe("ServerDetailOnlineHistory", () => {
 
 		renderWithQuery(<ServerDetailOnlineHistory server_id="7" />);
 
-		expect(await screen.findByText("0:00")).toBeInTheDocument();
-		expect(screen.getByText("12:00")).toBeInTheDocument();
-		expect(screen.getByText("24:00")).toBeInTheDocument();
+		expect(await screen.findByText("0:00 – 24:00")).toBeInTheDocument();
 
 		// 每个时间段按当日起点换算为百分比坐标（与时区无关）
 		const segments = await screen.findAllByTestId("online-segment");
@@ -136,6 +134,36 @@ describe("ServerDetailOnlineHistory", () => {
 			2,
 		);
 		expect(segments[0].style.minWidth).toBe("2px");
+	});
+
+	it("renders the compact mobile summary below the md breakpoint", async () => {
+		apiMocks.fetchServerOnlineHistory.mockResolvedValue(
+			onlineHistoryResponse(),
+		);
+		vi.stubGlobal(
+			"matchMedia",
+			vi.fn().mockImplementation(() => ({
+				matches: false,
+				addEventListener: vi.fn(),
+				removeEventListener: vi.fn(),
+			})),
+		);
+		try {
+			renderWithQuery(<ServerDetailOnlineHistory server_id="7" />);
+
+			expect(await screen.findByTestId("summary-mobile")).toBeInTheDocument();
+			expect(screen.queryByTestId("summary-desktop")).not.toBeInTheDocument();
+			// 移动端：大数字 + 双信息盒（合计在线 / 最近活跃）
+			expect(screen.getByText("0.9%")).toBeInTheDocument();
+			expect(
+				screen.getByText("serverOnlineHistory.totalOnline"),
+			).toBeInTheDocument();
+			expect(
+				screen.getByText("serverOnlineHistory.lastActive"),
+			).toBeInTheDocument();
+		} finally {
+			vi.unstubAllGlobals();
+		}
 	});
 
 	it("switches the query window via the day selector", async () => {
