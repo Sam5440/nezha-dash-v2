@@ -7,6 +7,13 @@ const serverCount = Number(process.env.MOCK_NEZHA_COUNT || 3000);
 const updateIntervalMs = Number(
 	process.env.MOCK_NEZHA_INTERVAL_MS || (serverCount > 10_000 ? 0 : 2000),
 );
+const dayMs = 86_400_000;
+const minuteMs = 60_000;
+const timezoneOffsetMs = 8 * 60 * minuteMs;
+const startedAt = Math.floor(Date.now() / 1000) * 1000;
+
+// 前几个节点提供固定 UI 场景；其余节点保留每 17 个离线一个的规则。
+const isServerOffline = (id) => id === 3 || id === 4 || id % 17 === 0;
 
 const countries = [
 	"US",
@@ -40,14 +47,16 @@ function createServer(index) {
 	const memUsed = memTotal * ((index % 90) / 100);
 	const diskUsed = diskTotal * ((index % 84) / 100);
 	const swapUsed = swapTotal ? swapTotal * ((index % 60) / 100) : 0;
-	const isOffline = id % 17 === 0;
+	const isOffline = isServerOffline(id);
 
 	return {
 		id,
 		name: `mock-server-${String(id).padStart(4, "0")}`,
 		public_note: id % 19 === 0 ? "[[Plan]] bandwidth=1Gbps" : "",
 		last_active: isOffline
-			? new Date(Date.now() - 10 * 60 * 1000).toISOString()
+			? new Date(
+					startedAt - (id === 4 ? 31 * dayMs : 10 * minuteMs),
+				).toISOString()
 			: nowIso(),
 		country_code: countries[index % countries.length],
 		host: {
@@ -87,14 +96,16 @@ function createServer(index) {
 const servers = Array.from({ length: serverCount }, (_, index) =>
 	createServer(index),
 );
-let onlineCount = servers.filter((server) => server.id % 17 !== 0).length;
+let onlineCount = servers.filter(
+	(server) => !isServerOffline(server.id),
+).length;
 
 function updateServerMetrics() {
 	const now = Date.now();
 	let nextOnlineCount = 0;
 
 	for (const server of servers) {
-		const isOffline = server.id % 17 === 0;
+		const isOffline = isServerOffline(server.id);
 		if (!isOffline) {
 			server.last_active = new Date(now).toISOString();
 			nextOnlineCount += 1;
@@ -126,13 +137,99 @@ function websocketPayload() {
 	return JSON.stringify(payload);
 }
 
-function jsonResponse(response, data) {
-	response.writeHead(200, {
+function jsonResponse(response, data, statusCode = 200) {
+	response.writeHead(statusCode, {
 		"Access-Control-Allow-Origin": "*",
 		"Cache-Control": "no-store",
 		"Content-Type": "application/json; charset=utf-8",
 	});
 	response.end(JSON.stringify(data));
+}
+
+function createOnlineHistory(server, days) {
+	const windowEnd = Math.floor(Date.now() / 1000) * 1000;
+	const windowStart = windowEnd - days * dayMs;
+	const firstDay =
+		Math.floor((windowStart + timezoneOffsetMs) / dayMs) * dayMs -
+		timezoneOffsetMs;
+	const currentlyOnline = !isServerOffline(server.id);
+	const onlineEnd = currentlyOnline
+		? windowEnd
+		: Date.parse(server.last_active);
+	const periods = [];
+	const daily = [];
+
+	const addPeriod = (start, end) => {
+		if (end <= start) return;
+		periods.push({
+			start: new Date(start).toISOString(),
+			end: new Date(end).toISOString(),
+			ongoing: currentlyOnline && end === windowEnd,
+		});
+	};
+
+	// 1/6: 日常短暂掉线；2: 持续在线；3: 当前离线；4: 无历史；5: 密集短时段。
+	// 先生成离线间隙，再取补集，跨午夜的在线会话保持连续。
+	if (server.id !== 4) {
+		let cursor = windowStart;
+		for (let day = firstDay; day < onlineEnd; day += dayMs) {
+			if (server.id === 2) continue;
+			const dayIndex = Math.floor((day + timezoneOffsetMs) / dayMs);
+			const hours =
+				server.id === 5
+					? [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22]
+					: [2, 8, 15];
+			for (const hour of hours) {
+				const gapStart = Math.max(windowStart, day + hour * 60 * minuteMs);
+				const gapMinutes =
+					server.id === 5 ? 35 : 10 + ((dayIndex + server.id + hour) % 6) * 13;
+				// 最后活跃前半小时保持在线，让时段终点与 WebSocket 状态一致。
+				const gapEnd = Math.min(
+					day + (hour * 60 + gapMinutes) * minuteMs,
+					onlineEnd - 30 * minuteMs,
+				);
+				if (gapEnd <= gapStart) continue;
+				addPeriod(cursor, gapStart);
+				cursor = gapEnd;
+			}
+		}
+		addPeriod(cursor, onlineEnd);
+	}
+
+	// 每日数字和概要都从同一组时段计算，避免时间轴与统计不一致。
+	for (let day = firstDay; day < windowEnd; day += dayMs) {
+		const onlineSeconds = periods.reduce((total, period) => {
+			const start = Math.max(day, Date.parse(period.start));
+			const end = Math.min(day + dayMs, Date.parse(period.end));
+			return total + Math.max(0, (end - start) / 1000);
+		}, 0);
+		daily.push({
+			date: new Date(day + timezoneOffsetMs).toISOString().slice(0, 10),
+			online_seconds: onlineSeconds,
+		});
+	}
+	const totalOnlineSeconds = daily.reduce(
+		(total, day) => total + day.online_seconds,
+		0,
+	);
+
+	return {
+		server_id: server.id,
+		server_name: server.name,
+		days,
+		max_days: 30,
+		timezone: "Asia/Shanghai",
+		window_start: new Date(windowStart).toISOString(),
+		window_end: new Date(windowEnd).toISOString(),
+		total_online_seconds: totalOnlineSeconds,
+		online_rate:
+			(totalOnlineSeconds / ((windowEnd - windowStart) / 1000)) * 100,
+		currently_online: currentlyOnline,
+		last_active:
+			server.id === 4 ? undefined : new Date(onlineEnd).toISOString(),
+		periods,
+		daily,
+	};
 }
 
 const populatedServerGroups = [
@@ -208,6 +305,35 @@ const httpServer = http.createServer((request, response) => {
 			"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
 		});
 		response.end();
+		return;
+	}
+
+	const onlineHistoryMatch = requestUrl.pathname.match(
+		/^\/api\/v1\/server\/(\d+)\/online-history$/,
+	);
+	if (onlineHistoryMatch) {
+		const server = servers[Number(onlineHistoryMatch[1]) - 1];
+		const days = Number(requestUrl.searchParams.get("days") ?? 7);
+		if (!server) {
+			jsonResponse(
+				response,
+				{ success: false, error: "server not found" },
+				404,
+			);
+			return;
+		}
+		if (!Number.isInteger(days) || days < 1 || days > 30) {
+			jsonResponse(
+				response,
+				{ success: false, error: "days must be an integer between 1 and 30" },
+				400,
+			);
+			return;
+		}
+		jsonResponse(response, {
+			success: true,
+			data: createOnlineHistory(server, days),
+		});
 		return;
 	}
 

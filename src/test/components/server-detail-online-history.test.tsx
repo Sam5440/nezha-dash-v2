@@ -1,5 +1,5 @@
 import { QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import dayjs from "dayjs";
 import type { ReactElement } from "react";
@@ -7,6 +7,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import ServerDetailOnlineHistory from "@/components/ServerDetailOnlineHistory";
 import { createTestQueryClient } from "@/test/utils";
 import type { OnlineHistoryResponse } from "@/types/nezha-api";
+
+const websocketMocks = vi.hoisted(() => ({
+	lastData: null as { servers: { id: number; last_active: string }[] } | null,
+}));
+vi.mock("@/hooks/use-websocket-context", () => ({
+	useWebSocketContext: () => websocketMocks,
+}));
 
 const apiMocks = vi.hoisted(() => ({
 	fetchServerOnlineHistory: vi.fn(),
@@ -61,6 +68,7 @@ function renderWithQuery(ui: ReactElement) {
 
 describe("ServerDetailOnlineHistory", () => {
 	beforeEach(() => {
+		websocketMocks.lastData = null;
 		apiMocks.fetchServerOnlineHistory.mockReset();
 	});
 
@@ -69,38 +77,67 @@ describe("ServerDetailOnlineHistory", () => {
 			new Promise(() => undefined),
 		);
 
-		const { container } = renderWithQuery(
-			<ServerDetailOnlineHistory server_id="7" />,
-		);
-
-		expect(container.querySelector(".h-\\[250px\\]")).toBeInTheDocument();
+		renderWithQuery(<ServerDetailOnlineHistory server_id="7" />);
+		expect(
+			screen.getByRole("status", { name: "serverOnlineHistory.loading" }),
+		).toHaveAttribute("aria-busy", "true");
+		expect(screen.getByTestId("online-history-loading")).toBeInTheDocument();
 		expect(apiMocks.fetchServerOnlineHistory).toHaveBeenCalledWith(7, 7);
 	});
 
-	it("renders summary, daily breakdown, and periods from the API", async () => {
-		const user = userEvent.setup();
+	it("keeps existing content instead of flashing the skeleton while changing days", async () => {
+		apiMocks.fetchServerOnlineHistory
+			.mockResolvedValueOnce(onlineHistoryResponse())
+			.mockReturnValue(new Promise(() => undefined));
+		renderWithQuery(<ServerDetailOnlineHistory server_id="7" />);
+		await screen.findByText("0.9%");
+		expect(
+			screen.queryByTestId("online-history-loading"),
+		).not.toBeInTheDocument();
+		await userEvent
+			.setup()
+			.click(screen.getByText("serverOnlineHistory.days30"));
+		await waitFor(() =>
+			expect(apiMocks.fetchServerOnlineHistory).toHaveBeenCalledWith(7, 30),
+		);
+		expect(screen.getByText("0.9%")).toBeInTheDocument();
+		expect(
+			screen.queryByTestId("online-history-loading"),
+		).not.toBeInTheDocument();
+	});
+
+	it("renders daily totals and all groups when fewer than three days are available", async () => {
 		apiMocks.fetchServerOnlineHistory.mockResolvedValue(
 			onlineHistoryResponse(),
 		);
+		renderWithQuery(<ServerDetailOnlineHistory server_id="7" />);
+		await screen.findByText("serverOnlineHistory.dailyOnline");
+		expect(screen.getAllByText("online")).toHaveLength(3);
+		expect(screen.getByText("0.9%")).toBeInTheDocument();
+		expect(screen.getAllByText("1h 30m")).toHaveLength(4);
+		expect(screen.getAllByText("1h 0m")).toHaveLength(3);
+		expect(screen.getByText("10-13")).toBeInTheDocument();
+		expect(
+			screen.queryByText("serverOnlineHistory.expandMore"),
+		).not.toBeInTheDocument();
+		expect(screen.getAllByTestId("period-chip")).toHaveLength(2);
+	});
+
+	it.each([
+		[1800, "1h 30m"],
+		[7200, "0m"],
+		[7500, "0m"],
+	])("calculates offline time from the actual window with %i online seconds", async (seconds, expected) => {
+		const response = onlineHistoryResponse();
+		response.data.window_start = "2026-10-14T10:00:00.000Z";
+		response.data.window_end = "2026-10-14T12:00:00.000Z";
+		response.data.total_online_seconds = seconds;
+		apiMocks.fetchServerOnlineHistory.mockResolvedValue(response);
 
 		renderWithQuery(<ServerDetailOnlineHistory server_id="7" />);
 
-		expect(
-			await screen.findByText("serverOnlineHistory.dailyOnline"),
-		).toBeInTheDocument();
-		// 概要状态灯 + 最近一天组头各一次 "online"
-		expect(screen.getAllByText("online")).toHaveLength(2);
-		expect(screen.getByText("0.9%")).toBeInTheDocument();
-		// 时间段卡默认只显示最近一天：汇总与 2026-10-13 日行各一次 1h 30m
-		expect(screen.getAllByText("1h 30m")).toHaveLength(2);
-		// 2026-10-14 组：日行、组头合计与 chip 时长均为 3600s
-		expect(screen.getAllByText("1h 0m")).toHaveLength(3);
-		expect(screen.queryByText("10-13")).not.toBeInTheDocument();
-		// 展开更多后显示 2026-10-13 分组（组头 + chip 各一次 1h 30m）
-		await user.click(screen.getByText("serverOnlineHistory.expandMore"));
-		expect(screen.getByText("10-13")).toBeInTheDocument();
-		expect(screen.getAllByText("1h 30m")).toHaveLength(4);
-		expect(screen.getAllByText(/→/).length).toBe(2);
+		const label = await screen.findByText("serverOnlineHistory.totalOffline");
+		expect(label.parentElement).toHaveTextContent(expected);
 	});
 
 	it("maps each day's periods onto the shared 0:00-24:00 timeline", async () => {
@@ -126,6 +163,58 @@ describe("ServerDetailOnlineHistory", () => {
 		expect(segments[0].style.minWidth).toBe("2px");
 	});
 
+	it("keeps daily totals, carry-over chips and window markers consistent", async () => {
+		const response = onlineHistoryResponse();
+		Object.assign(response.data, {
+			window_start: "2026-10-13T06:00:00.000Z",
+			window_end: "2026-10-14T12:00:00.000Z",
+			total_online_seconds: 9 * 3600,
+			daily: [
+				{ date: "2026-10-13", online_seconds: 7200 },
+				{ date: "2026-10-14", online_seconds: 7 * 3600 },
+			],
+			periods: [
+				{
+					start: "2026-10-13T22:00:00.000Z",
+					end: "2026-10-14T02:00:00.000Z",
+					ongoing: false,
+				},
+				{
+					start: "2026-10-14T03:00:00.000Z",
+					end: "2026-10-14T04:00:00.000Z",
+					ongoing: false,
+				},
+				{
+					start: "2026-10-14T08:00:00.000Z",
+					end: "2026-10-14T12:00:00.000Z",
+					ongoing: true,
+				},
+			],
+		});
+		apiMocks.fetchServerOnlineHistory.mockResolvedValue(response);
+		renderWithQuery(<ServerDetailOnlineHistory server_id="7" />);
+		const rows = await screen.findAllByTestId("daily-online-day");
+		expect(within(rows[1]).getByText("7h 0m")).toBeInTheDocument();
+		expect(within(rows[1]).getAllByTestId("online-segment")).toHaveLength(3);
+		const latestGroup = screen.getAllByTestId("period-day")[0];
+		expect(within(latestGroup).getByText("7h 0m")).toBeInTheDocument();
+		const chips = within(latestGroup).getAllByTestId("period-chip");
+		expect(chips).toHaveLength(3);
+		expect(chips[0]).toHaveTextContent("00:00 → 02:00");
+		expect(screen.getByTestId("outside-window")).toHaveStyle({ width: "25%" });
+		expect(screen.getByTestId("unrecorded-window")).toHaveStyle({
+			left: "50%",
+			width: "50%",
+		});
+		expect(screen.getByTestId("data-cutoff")).toHaveAccessibleName(
+			"serverOnlineHistory.dataCutoff 12:00:00",
+		);
+		await userEvent.setup().hover(chips[0]);
+		expect(await screen.findByRole("tooltip")).toHaveTextContent(
+			"serverOnlineHistory.originalSession 10-13 22:00:00 → 10-14 02:00:00",
+		);
+	});
+
 	it("renders the compact mobile summary below the md breakpoint", async () => {
 		apiMocks.fetchServerOnlineHistory.mockResolvedValue(
 			onlineHistoryResponse(),
@@ -143,8 +232,11 @@ describe("ServerDetailOnlineHistory", () => {
 
 			expect(await screen.findByTestId("summary-mobile")).toBeInTheDocument();
 			expect(screen.queryByTestId("summary-desktop")).not.toBeInTheDocument();
-			// 移动端：大数字 + 双信息盒（合计在线 / 最近活跃）
+			// 移动端：在线率 + 在线/离线双指标 + 最近活跃。
 			expect(screen.getByText("0.9%")).toBeInTheDocument();
+			expect(
+				screen.getByText("serverOnlineHistory.totalOffline"),
+			).toBeInTheDocument();
 			expect(
 				screen.getByText("serverOnlineHistory.totalOnline"),
 			).toBeInTheDocument();
@@ -154,6 +246,30 @@ describe("ServerDetailOnlineHistory", () => {
 		} finally {
 			vi.unstubAllGlobals();
 		}
+	});
+
+	it("keeps the live last-active time when switching history windows", async () => {
+		const user = userEvent.setup();
+		websocketMocks.lastData = {
+			servers: [{ id: 7, last_active: "2026-10-14T12:34:56.000Z" }],
+		};
+		apiMocks.fetchServerOnlineHistory.mockImplementation((_id, days) => {
+			const response = onlineHistoryResponse();
+			response.data.online_rate = days === 30 ? 50 : 90;
+			response.data.last_active =
+				days === 30 ? "2026-10-14T10:00:00.000Z" : "2026-10-14T11:00:00.000Z";
+			return Promise.resolve(response);
+		});
+		renderWithQuery(<ServerDetailOnlineHistory server_id="7" />);
+		expect(await screen.findByText("12:34:56")).toBeInTheDocument();
+		await user.click(screen.getByText("serverOnlineHistory.days30"));
+		expect(await screen.findByText("50.0%")).toBeInTheDocument();
+		await waitFor(() =>
+			expect(apiMocks.fetchServerOnlineHistory).toHaveBeenCalledWith(7, 30),
+		);
+		expect(screen.getByText("12:34:56")).toBeInTheDocument();
+		await user.click(screen.getByText("serverOnlineHistory.days7"));
+		expect(screen.getByText("12:34:56")).toBeInTheDocument();
 	});
 
 	it("switches the query window via the day selector", async () => {
@@ -229,6 +345,8 @@ describe("ServerDetailOnlineHistory", () => {
 		const data = onlineHistoryResponse().data;
 		// 面板时区非 UTC 才能暴露 dayjs .tz(input, zone) 忽略显式偏移的问题
 		data.timezone = "Asia/Shanghai";
+		data.window_start = "2026-01-01T16:00:00.000Z";
+		data.window_end = "2026-01-02T16:00:00.000Z";
 		data.daily = [{ date: "2026-01-02", online_seconds: 7200 }];
 		data.periods = [
 			{
@@ -253,12 +371,13 @@ describe("ServerDetailOnlineHistory", () => {
 		expect(chip.textContent).toContain("06:00");
 	});
 
-	it("expands online periods ten days per click starting from the latest day", async () => {
+	it("shows three days initially and expands ten days per click", async () => {
 		const user = userEvent.setup();
 		const data = onlineHistoryResponse().data;
 		const dates = Array.from({ length: 25 }, (_, i) =>
 			dayjs("2026-10-14").subtract(i, "day").format("YYYY-MM-DD"),
 		);
+		data.window_start = `${dates[dates.length - 1]}T00:00:00.000Z`;
 		data.daily = dates.map((date) => ({ date, online_seconds: 3600 }));
 		data.periods = dates.map((date) => ({
 			start: `${date}T06:00:00.000Z`,
@@ -273,13 +392,13 @@ describe("ServerDetailOnlineHistory", () => {
 		renderWithQuery(<ServerDetailOnlineHistory server_id="7" />);
 		await screen.findByText("serverOnlineHistory.dailyOnline");
 
-		expect(screen.getAllByTestId("period-day")).toHaveLength(1);
+		expect(screen.getAllByTestId("period-day")).toHaveLength(3);
 
 		await user.click(screen.getByText("serverOnlineHistory.expandMore"));
-		expect(screen.getAllByTestId("period-day")).toHaveLength(11);
+		expect(screen.getAllByTestId("period-day")).toHaveLength(13);
 
 		await user.click(screen.getByText("serverOnlineHistory.expandMore"));
-		expect(screen.getAllByTestId("period-day")).toHaveLength(21);
+		expect(screen.getAllByTestId("period-day")).toHaveLength(23);
 
 		await user.click(screen.getByText("serverOnlineHistory.expandMore"));
 		expect(screen.getAllByTestId("period-day")).toHaveLength(25);

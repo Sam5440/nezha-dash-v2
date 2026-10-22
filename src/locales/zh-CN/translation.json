@@ -171,11 +171,18 @@
 		"all": "全部"
 	},
 	"serverOnlineHistory": {
+		"loading": "正在加载在线记录",
+		"originalSession": "原始会话",
+		"dataCutoffHint": "竖线：数据截止",
+		"dataCutoff": "数据截止",
+		"notYetRecorded": "尚未统计",
+		"outsideWindow": "未纳入统计",
 		"days1": "1 天",
 		"days7": "7 天",
 		"days30": "30 天",
 		"onlineRate": "在线率",
-		"totalOnline": "统计窗口内在线",
+		"totalOnline": "累计在线",
+		"totalOffline": "累计离线",
 		"lastActive": "最后活跃",
 		"dailyOnline": "每日在线时长",
 		"periods": "在线时间段",
@@ -183,8 +190,8 @@
 		"noData": "暂无在线记录",
 		"loginRequired": "当前窗口需要登录后查看，游客可切换到 1 天",
 		"offlinePeriods": "不在线时间段",
-		"periodsOnline": "在线时间段",
-		"periodsOffline": "不在线时间段",
+		"periodsOnline": "在线",
+		"periodsOffline": "离线",
 		"expandMore": "展开更多",
 		"today": "今天"
 	}

@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { Navigate, useParams } from "react-router-dom";
+import OnlineHistorySkeleton from "@/components/loading/OnlineHistorySkeleton";
 import NetworkChartLoading from "@/components/NetworkChartLoading";
 import ServerDetailChart from "@/components/ServerDetailChart";
 import ServerDetailOverview from "@/components/ServerDetailOverview";
@@ -58,7 +59,7 @@ export default function ServerDetail() {
 				</Suspense>
 			)}
 			{currentTab === tabs[2] && (
-				<Suspense fallback={<NetworkChartLoading />}>
+				<Suspense fallback={<OnlineHistorySkeleton />}>
 					<ServerDetailOnlineHistory server_id={server_id} />
 				</Suspense>
 			)}

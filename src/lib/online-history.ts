@@ -10,6 +10,7 @@ export type PeriodChip = {
 	start: dayjs.Dayjs;
 	end: dayjs.Dayjs;
 	ongoing: boolean;
+	original?: OnlinePeriod;
 };
 
 export type PeriodDayGroup = {
@@ -67,7 +68,7 @@ export function formatPeriodMoment(
 	withSeconds = false,
 ): string {
 	const dayEnd = panelNextDayStart(anchor.format("YYYY-MM-DD"), tz);
-	if (value.isSame(dayEnd)) {
+	if (value.valueOf() === dayEnd.valueOf()) {
 		return withSeconds ? "24:00:00" : "24:00";
 	}
 	return value.format(withSeconds ? "HH:mm:ss" : "HH:mm");
@@ -97,43 +98,170 @@ function wallClockPercent(value: dayjs.Dayjs): number {
 	return (seconds / 86400) * 100;
 }
 
-// 把一天映射到 0:00–24:00 整轴：裁剪出该日与每个时间段的交集，
-// 换算成轨道内的挂钟百分比坐标。
+// 每天实际纳入统计的区间；挂钟坐标用于绘图，秒数用于时长/在线率。
+export function buildDayWindow(
+	date: string,
+	windowStart: string,
+	windowEnd: string,
+	tz?: string,
+) {
+	const dayStart = panelDay(date, tz);
+	const dayEnd = panelNextDayStart(date, tz);
+	const start = panelDay(windowStart, tz);
+	const end = panelDay(windowEnd, tz);
+	const effectiveStart =
+		start.valueOf() > dayStart.valueOf() ? start : dayStart;
+	const effectiveEnd = end.valueOf() < dayEnd.valueOf() ? end : dayEnd;
+	const percent = (value: dayjs.Dayjs) =>
+		value.valueOf() < dayStart.valueOf() ||
+		value.valueOf() === dayStart.valueOf()
+			? 0
+			: value.valueOf() > dayEnd.valueOf() ||
+					value.valueOf() === dayEnd.valueOf()
+				? 100
+				: wallClockPercent(value);
+	return {
+		dayStart,
+		dayEnd,
+		start: effectiveStart,
+		end: effectiveEnd,
+		seconds: Math.max(0, effectiveEnd.diff(effectiveStart, "second")),
+		leftPct: percent(effectiveStart),
+		rightPct: percent(effectiveEnd),
+	};
+}
+
+export function dailyOnlineRate(onlineSeconds: number, windowSeconds: number) {
+	return windowSeconds > 0
+		? Math.max(0, Math.min(100, (onlineSeconds / windowSeconds) * 100))
+		: 0;
+}
+
+// 每份响应只解析一次时段和窗口边界；后续按天裁剪仅比较时间戳。
+function preparePeriods(
+	periods: OnlinePeriod[],
+	tz?: string,
+	windowStart?: string,
+	windowEnd?: string,
+) {
+	const lower = windowStart ? panelDay(windowStart, tz) : null;
+	const upper = windowEnd ? panelDay(windowEnd, tz) : null;
+	return periods.flatMap((period) => {
+		const originalStart = panelDay(period.start, tz);
+		const originalEnd = panelDay(period.end, tz);
+		const start =
+			lower && lower.valueOf() > originalStart.valueOf()
+				? lower
+				: originalStart;
+		const end =
+			upper && upper.valueOf() < originalEnd.valueOf() ? upper : originalEnd;
+		return start.isValid() && end.isValid() && end.valueOf() > start.valueOf()
+			? [
+					{
+						period,
+						start,
+						end,
+						live: period.ongoing && end.valueOf() === originalEnd.valueOf(),
+					},
+				]
+			: [];
+	});
+}
+
+function buildParsedDaySegments(
+	periods: ReturnType<typeof preparePeriods>,
+	dayStart: dayjs.Dayjs,
+	dayEnd: dayjs.Dayjs,
+): DaySegment[] {
+	const lower = dayStart.valueOf(),
+		upper = dayEnd.valueOf();
+	return periods.flatMap(({ period, start, end, live }) => {
+		if (end.valueOf() <= lower || start.valueOf() >= upper) return [];
+		const segStart = start.valueOf() > lower ? start : dayStart;
+		const segEnd = end.valueOf() < upper ? end : dayEnd;
+		const leftPct =
+			segStart.valueOf() === lower ? 0 : wallClockPercent(segStart);
+		const rightPct =
+			segEnd.valueOf() === upper ? 100 : wallClockPercent(segEnd);
+		const widthPct = Math.max(0, Math.min(rightPct - leftPct, 100 - leftPct));
+		return widthPct > 0
+			? [
+					{
+						period,
+						segStart,
+						segEnd,
+						leftPct,
+						widthPct,
+						live: live && segEnd.valueOf() === end.valueOf(),
+					},
+				]
+			: [];
+	});
+}
+
 export function buildDaySegments(
 	periods: OnlinePeriod[],
 	date: string,
 	tz?: string,
+	windowStart?: string,
+	windowEnd?: string,
 ): DaySegment[] {
-	const dayStart = panelDay(date, tz);
-	const dayEnd = panelNextDayStart(date, tz);
-	return periods
-		.map((period) => {
-			const start = panelDay(period.start, tz);
-			const end = panelDay(period.end, tz);
-			if (!end.isAfter(dayStart) || !start.isBefore(dayEnd)) {
-				return null;
-			}
-			const segStart = start.isAfter(dayStart) ? start : dayStart;
-			const segEnd = end.isBefore(dayEnd) ? end : dayEnd;
-			const leftPct = segStart.isSame(dayStart)
-				? 0
-				: wallClockPercent(segStart);
-			const rightPct = segEnd.isSame(dayEnd) ? 100 : wallClockPercent(segEnd);
-			const widthPct = Math.max(0, Math.min(rightPct - leftPct, 100 - leftPct));
-			if (widthPct <= 0) {
-				return null;
-			}
-			return {
-				period,
-				segStart,
-				segEnd,
-				leftPct,
-				widthPct,
-				// 跨天裁剪出的历史段结束于日界，不应显示为 Ongoing
-				live: period.ongoing && segEnd.isSame(end),
-			};
-		})
-		.filter((segment): segment is DaySegment => segment !== null);
+	return buildParsedDaySegments(
+		preparePeriods(periods, tz, windowStart, windowEnd),
+		panelDay(date, tz),
+		panelNextDayStart(date, tz),
+	);
+}
+
+// 时间轴、每日总计及在线列表共享这份结果，不再各自遍历并转换整份历史。
+export function buildDailyOnlineRows(
+	periods: OnlinePeriod[],
+	daily: DailyOnlineStat[],
+	windowStart: string,
+	windowEnd: string,
+	tz?: string,
+) {
+	const prepared = preparePeriods(periods, tz, windowStart, windowEnd);
+	return daily.map((day) => {
+		const window = buildDayWindow(day.date, windowStart, windowEnd, tz);
+		const segments = buildParsedDaySegments(
+			prepared,
+			window.dayStart,
+			window.dayEnd,
+		);
+		return {
+			...day,
+			segments,
+			window,
+			online_seconds: segments.reduce(
+				(sum, segment) => sum + segment.segEnd.diff(segment.segStart, "second"),
+				0,
+			),
+		};
+	});
+}
+
+export function groupOnlineRows(
+	rows: { date: string; segments: DaySegment[] }[],
+	tz?: string,
+): PeriodDayGroup[] {
+	return rows
+		.filter((row) => row.segments.length > 0)
+		.map((row) => ({
+			date: row.date,
+			day: panelDay(row.date, tz),
+			chips: row.segments.map((segment) => ({
+				start: segment.segStart,
+				end: segment.segEnd,
+				ongoing: segment.live,
+				original: segment.period,
+			})),
+			total: row.segments.reduce(
+				(sum, segment) => sum + segment.segEnd.diff(segment.segStart, "second"),
+				0,
+			),
+		}))
+		.sort((a, b) => b.date.localeCompare(a.date));
 }
 
 // 合并重叠/相邻的时间段，按开始时间排序
@@ -151,8 +279,8 @@ export function mergePeriods(
 	const merged: PeriodChip[] = [];
 	for (const period of sorted) {
 		const last = merged[merged.length - 1];
-		if (last && period.start.isBefore(last.end)) {
-			if (period.end.isAfter(last.end)) {
+		if (last && period.start.valueOf() < last.end.valueOf()) {
+			if (period.end.valueOf() > last.end.valueOf()) {
 				last.end = period.end;
 			}
 			last.ongoing = last.ongoing || period.ongoing;
@@ -163,38 +291,35 @@ export function mergePeriods(
 	return merged;
 }
 
-// 在线模式：按开始日分组（跨天时段归入开始日），合计取组内可见 chip 的时长之和，
-// 避免组头数字与 chip 上的时长互相矛盾
+// 独立调用也复用同一预解析/裁剪流程。
 export function groupOnlinePeriods(
 	periods: OnlinePeriod[],
 	tz?: string,
+	windowStart?: string,
+	windowEnd?: string,
 ): PeriodDayGroup[] {
-	const byDate = new Map<string, PeriodChip[]>();
-	for (const period of periods) {
-		const date = panelDay(period.start, tz).format("YYYY-MM-DD");
-		const chip: PeriodChip = {
-			start: panelDay(period.start, tz),
-			end: panelDay(period.end, tz),
-			ongoing: period.ongoing,
-		};
-		const chips = byDate.get(date);
-		if (chips) {
-			chips.push(chip);
-		} else {
-			byDate.set(date, [chip]);
-		}
+	const prepared = preparePeriods(periods, tz, windowStart, windowEnd);
+	const dates = new Set<string>();
+	for (const { start, end } of prepared) {
+		const endDate = end.format("YYYY-MM-DD");
+		for (
+			let date = start.format("YYYY-MM-DD");
+			date <= endDate;
+			date = nextDate(date)
+		)
+			dates.add(date);
 	}
-	return [...byDate.entries()]
-		.sort((a, b) => (a[0] < b[0] ? 1 : -1))
-		.map(([date, chips]) => ({
+	return groupOnlineRows(
+		[...dates].map((date) => ({
 			date,
-			day: panelDay(date, tz),
-			total: chips.reduce(
-				(sum, chip) => sum + chip.end.diff(chip.start, "second"),
-				0,
+			segments: buildParsedDaySegments(
+				prepared,
+				panelDay(date, tz),
+				panelNextDayStart(date, tz),
 			),
-			chips,
-		}));
+		})),
+		tz,
+	);
 }
 
 // 离线模式：对窗口内每一天求在线时段的补集。计算区间先与查询窗口取交集，
@@ -209,9 +334,6 @@ export function buildOfflineGroups(
 	tz?: string,
 ): PeriodDayGroup[] {
 	const merged = mergePeriods(periods, tz);
-	const secondsByDate = new Map(
-		daily.map((day) => [day.date, day.online_seconds]),
-	);
 	const windowStartTime = panelDay(windowStart, tz);
 	const windowEndTime = panelDay(windowEnd, tz);
 	const groups = daily
@@ -221,49 +343,45 @@ export function buildOfflineGroups(
 			const dayStart = panelDay(date, tz);
 			const dayEnd = panelNextDayStart(date, tz);
 			// 当天与查询窗口的交集；首日/末日通常不是完整 24 小时
-			const effectiveStart = dayStart.isAfter(windowStartTime)
-				? dayStart
-				: windowStartTime;
-			const effectiveEnd = dayEnd.isBefore(windowEndTime)
-				? dayEnd
-				: windowEndTime;
-			if (!effectiveEnd.isAfter(effectiveStart)) {
+			const effectiveStart =
+				dayStart.valueOf() > windowStartTime.valueOf()
+					? dayStart
+					: windowStartTime;
+			const effectiveEnd =
+				dayEnd.valueOf() < windowEndTime.valueOf() ? dayEnd : windowEndTime;
+			if (!(effectiveEnd.valueOf() > effectiveStart.valueOf())) {
 				return [];
 			}
 			const chips: PeriodChip[] = [];
 			let cursor = effectiveStart;
 			for (const segment of merged) {
-				if (!segment.end.isAfter(effectiveStart)) {
+				if (!(segment.end.valueOf() > effectiveStart.valueOf())) {
 					continue;
 				}
 				// merged 按开始时间升序；到达当天区间之后的时段即可停止，
 				// 否则会把未来日期的开始时刻当成当天的 gap 终点
-				if (!segment.start.isBefore(effectiveEnd)) {
+				if (!(segment.start.valueOf() < effectiveEnd.valueOf())) {
 					break;
 				}
-				const segStart = segment.start.isAfter(cursor) ? segment.start : cursor;
-				if (segStart.isAfter(cursor)) {
+				const segStart =
+					segment.start.valueOf() > cursor.valueOf() ? segment.start : cursor;
+				if (segStart.valueOf() > cursor.valueOf()) {
 					chips.push({ start: cursor, end: segStart, ongoing: false });
 				}
-				const segEnd = segment.end.isBefore(effectiveEnd)
-					? segment.end
-					: effectiveEnd;
-				if (segEnd.isAfter(cursor)) {
+				const segEnd =
+					segment.end.valueOf() < effectiveEnd.valueOf()
+						? segment.end
+						: effectiveEnd;
+				if (segEnd.valueOf() > cursor.valueOf()) {
 					cursor = segEnd;
 				}
 			}
-			if (cursor.isBefore(effectiveEnd)) {
+			if (cursor.valueOf() < effectiveEnd.valueOf()) {
 				chips.push({ start: cursor, end: effectiveEnd, ongoing: false });
 			}
-			const windowSeconds = effectiveEnd.diff(effectiveStart, "second");
-			const total = Math.max(
+			const total = chips.reduce(
+				(sum, chip) => sum + chip.end.diff(chip.start, "second"),
 				0,
-				windowSeconds -
-					(secondsByDate.get(date) ??
-						chips.reduce(
-							(sum, chip) => sum + chip.end.diff(chip.start, "second"),
-							0,
-						)),
 			);
 			return [{ date, day: dayStart, total, chips }];
 		})

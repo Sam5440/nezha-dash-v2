@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
 	buildDaySegments,
+	buildDayWindow,
 	buildOfflineGroups,
+	dailyOnlineRate,
 	formatPeriodMoment,
 	groupOnlinePeriods,
 	panelDay,
@@ -119,19 +121,69 @@ describe("buildOfflineGroups", () => {
 });
 
 describe("groupOnlinePeriods", () => {
-	it("keeps a cross-midnight group total equal to its visible chip", () => {
-		const groups = groupOnlinePeriods(
-			[period("2026-10-19T22:00:00.000Z", "2026-10-20T03:00:00.000Z")],
+	it("splits cross-midnight sessions into the same segments as the daily timeline", () => {
+		const periods = [
+			period("2026-10-19T22:00:00.000Z", "2026-10-20T03:00:00.000Z", true),
+		];
+		const groups = groupOnlinePeriods(periods, "UTC");
+		expect(groups.map((g) => [g.date, g.total])).toEqual([
+			["2026-10-20", 10800],
+			["2026-10-19", 7200],
+		]);
+		for (const group of groups) {
+			const segments = buildDaySegments(periods, group.date, "UTC");
+			expect(group.total).toBe(
+				segments.reduce(
+					(sum, s) => sum + s.segEnd.diff(s.segStart, "second"),
+					0,
+				),
+			);
+			expect(group.chips[0].original).toEqual(periods[0]);
+		}
+		expect(groups[0].chips[0].ongoing).toBe(true);
+		expect(groups[1].chips[0].ongoing).toBe(false);
+	});
+
+	it("clips both timeline and chips to the actual query window", () => {
+		const periods = [
+			period("2026-10-19T22:00:00.000Z", "2026-10-21T03:00:00.000Z", true),
+		];
+		const start = "2026-10-20T06:00:00.000Z",
+			end = "2026-10-20T12:00:00.000Z";
+		const [group] = groupOnlinePeriods(periods, "UTC", start, end);
+		expect(group.total).toBe(21600);
+		expect(group.chips[0].start.toISOString()).toBe(start);
+		expect(group.chips[0].end.toISOString()).toBe(end);
+		expect(group.chips[0].ongoing).toBe(false);
+		const [segment] = buildDaySegments(periods, group.date, "UTC", start, end);
+		expect(segment.leftPct).toBe(25);
+		expect(segment.widthPct).toBe(25);
+	});
+});
+
+describe("buildDayWindow", () => {
+	it("distinguishes excluded hours from a partially observed day", () => {
+		const window = buildDayWindow(
+			"2026-10-20",
+			"2026-10-20T06:00:00Z",
+			"2026-10-20T12:00:00Z",
 			"UTC",
 		);
-
-		expect(groups).toHaveLength(1);
-		expect(groups[0].date).toBe("2026-10-19");
-		expect(groups[0].chips).toHaveLength(1);
-		expect(groups[0].chips[0].end.diff(groups[0].chips[0].start, "hour")).toBe(
-			5,
-		);
-		expect(groups[0].total).toBe(5 * 3600);
+		expect(window.leftPct).toBe(25);
+		expect(window.rightPct).toBe(50);
+		expect(window.seconds).toBe(21600);
+		expect(dailyOnlineRate(21600, window.seconds)).toBe(100);
+		expect(dailyOnlineRate(0, 0)).toBe(0);
+	});
+	it.each([
+		["2026-03-08", "2026-03-08T05:00:00Z", "2026-03-09T04:00:00Z", 23],
+		["2026-11-01", "2026-11-01T04:00:00Z", "2026-11-02T05:00:00Z", 25],
+	])("uses actual elapsed time across DST on %s", (date, start, end, hours) => {
+		const window = buildDayWindow(date, start, end, "America/New_York");
+		expect(window.seconds).toBe(Number(hours) * 3600);
+		expect(window.leftPct).toBe(0);
+		expect(window.rightPct).toBe(100);
+		expect(dailyOnlineRate(window.seconds, window.seconds)).toBe(100);
 	});
 });
 
